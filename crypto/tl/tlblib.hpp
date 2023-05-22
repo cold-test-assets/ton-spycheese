@@ -260,6 +260,20 @@ class TLB {
     return (x > 1) * 2 + (x & 1);
   }
 
+  class ValidateCache : public td::Context<ValidateCache> {
+   public:
+    ValidateCache(std::function<bool(const TLB*, const td::Ref<vm::Cell>&)> f) : f_(std::move(f)) {
+    }
+    bool operator()(const TLB* type, const td::Ref<vm::Cell>& cell) {
+      return f_(type, cell);
+    }
+
+    static ValidateCache create_for_type(const TLB* type);
+
+   private:
+    std::function<bool(const TLB*, const td::Ref<vm::Cell>&)> f_;
+  };
+
  protected:
   bool validate_ref_internal(int* ops, Ref<vm::Cell> cell_ref, bool weak = false) const;
 };

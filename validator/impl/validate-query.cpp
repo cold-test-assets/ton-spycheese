@@ -2115,8 +2115,12 @@ bool ValidateQuery::unpack_block_data() {
   if (!block::tlb::t_InMsgDescr.validate_upto(10000000, *inmsg_cs)) {
     return reject_query("InMsgDescr of the new block failed to pass handwritten validity tests");
   }
-  if (!block::tlb::t_OutMsgDescr.validate_upto(10000000, *outmsg_cs)) {
-    return reject_query("OutMsgDescr of the new block failed to pass handwritten validity tests");
+  {
+    auto cache = tlb::TLB::ValidateCache::create_for_type(&block::tlb::t_Transaction);
+    tlb::TLB::ValidateCache::Guard guard(&cache);
+    if (!block::tlb::t_OutMsgDescr.validate_upto(10000000, *outmsg_cs)) {
+      return reject_query("OutMsgDescr of the new block failed to pass handwritten validity tests");
+    }
   }
   if (!block::tlb::t_ShardAccountBlocks.validate_ref(10000000, extra.account_blocks)) {
     return reject_query("ShardAccountBlocks of the new block failed to pass handwritten validity tests");
@@ -5534,8 +5538,12 @@ bool ValidateQuery::try_validate() {
       }
     }
     LOG(INFO) << "running automated validity checks for block candidate " << id_.to_str();
-    if (!block::gen::t_Block.validate_ref(10000000, block_root_)) {
-      return reject_query("block "s + id_.to_str() + " failed to pass automated validity checks");
+    {
+      auto cache = tlb::TLB::ValidateCache::create_for_type(&block::gen::t_Transaction);
+      tlb::TLB::ValidateCache::Guard guard(&cache);
+      if (!block::gen::t_Block.validate_ref(10000000, block_root_)) {
+        return reject_query("block "s + id_.to_str() + " failed to pass automated validity checks");
+      }
     }
     if (!fix_all_processed_upto()) {
       return fatal_error("cannot adjust all ProcessedUpto of neighbor and previous blocks");
