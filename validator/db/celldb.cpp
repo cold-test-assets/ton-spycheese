@@ -133,6 +133,9 @@ void CellDbIn::store_cell(BlockIdExt block_id, td::Ref<vm::Cell> cell, td::Promi
   td::actor::send_closure(parent_, &CellDb::update_snapshot, cell_db_->snapshot());
 
   promise.set_result(boc_->load_cell(cell->get_hash().as_slice()));
+  double t = timer.elapsed();
+  LOG(WARNING) << "CELLDB_TIME STORE " << (block_id.is_masterchain() ? "" : " ") << block_id.id.to_str() << " " << t;
+  time_stat_.sum_store += t;
 }
 
 void CellDbIn::get_cell_db_reader(td::Promise<std::shared_ptr<vm::CellDbReader>> promise) {
@@ -140,6 +143,18 @@ void CellDbIn::get_cell_db_reader(td::Promise<std::shared_ptr<vm::CellDbReader>>
 }
 
 void CellDbIn::alarm() {
+  if (!time_stat_.start || time_stat_.end_after.is_in_past()) {
+    td::Timestamp end = td::Timestamp::now();
+    if (time_stat_.start) {
+      char buf[128];
+      snprintf(buf, 128, "CELLDB_STAT : %7.4f %7.4f %7.4f", time_stat_.sum_store, time_stat_.sum_gc,
+               end.at() - time_stat_.start.at() - time_stat_.sum_store - time_stat_.sum_gc);
+      LOG(WARNING) << buf;
+    }
+    time_stat_ = {};
+    time_stat_.start = end;
+    time_stat_.end_after = td::Timestamp::in(60.0, end);
+  }
   auto E = get_block(get_empty_key_hash()).move_as_ok();
   auto N = get_block(E.next).move_as_ok();
   if (N.is_empty()) {
@@ -224,6 +239,10 @@ void CellDbIn::gc_cont2(BlockHandle handle) {
   td::actor::send_closure(parent_, &CellDb::update_snapshot, cell_db_->snapshot());
 
   DCHECK(get_block(key_hash).is_error());
+  double t = timer.elapsed();
+  LOG(WARNING) << "CELLDB_TIME GC " << (handle->id().is_masterchain() ? "" : " ") << handle->id().id.to_str() << " "
+               << t;
+  time_stat_.sum_gc += t;
 }
 
 void CellDbIn::skip_gc() {

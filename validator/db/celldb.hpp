@@ -96,6 +96,14 @@ class CellDbIn : public CellDbBase {
 
   std::unique_ptr<vm::DynamicBagOfCellsDb> boc_;
   std::shared_ptr<vm::KeyValue> cell_db_;
+
+  struct TimeStat {
+    td::Timestamp start = td::Timestamp::never();
+    td::Timestamp end_after = td::Timestamp::never();
+    double sum_store = 0.0;
+    double sum_gc = 0.0;
+  };
+  TimeStat time_stat_;
 };
 
 class CellDb : public CellDbBase {
