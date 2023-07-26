@@ -345,6 +345,11 @@ void ValidatorSessionImpl::process_query(PublicKeyHash src, td::BufferSlice data
     }
   }
   CHECK(block);
+  auto it = blocks_.find(SentBlock::get_block_id(block));
+  if (it != blocks_.end()) {
+    promise.set_result(serialize_candidate(it->second, compress_block_candidates_));
+    return;
+  }
 
   auto P = td::PromiseCreator::lambda([promise = std::move(promise), src = f->id_->src_, round_id,
                                        compress = compress_block_candidates_](td::Result<BlockCandidate> R) mutable {
