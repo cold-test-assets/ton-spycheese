@@ -57,7 +57,7 @@ static inline bool dbg(int c) {
 Collator::Collator(ShardIdFull shard, bool is_hardfork, BlockIdExt min_masterchain_block_id,
                    std::vector<BlockIdExt> prev, td::Ref<ValidatorSet> validator_set, Ed25519_PublicKey collator_id,
                    td::actor::ActorId<ValidatorManager> manager, td::Timestamp timeout,
-                   td::Promise<BlockCandidate> promise)
+                   td::Promise<BlockCandidate> promise, unsigned mode)
     : shard_(shard)
     , is_hardfork_(is_hardfork)
     , min_mc_block_id{min_masterchain_block_id}
@@ -71,6 +71,7 @@ Collator::Collator(ShardIdFull shard, bool is_hardfork, BlockIdExt min_mastercha
     , soft_timeout_(td::Timestamp::at(timeout.at() - 3.0))
     , medium_timeout_(td::Timestamp::at(timeout.at() - 1.5))
     , main_promise(std::move(promise))
+    , mode_(mode)
     , perf_timer_("collate", 0.1, [manager](double duration) {
       send_closure(manager, &ValidatorManager::add_perf_timer_stat, "collate", duration);
     }) {
@@ -631,27 +632,45 @@ bool Collator::request_neighbor_msg_queues() {
     }
     neighbors_.emplace_back(*shard_ptr);
   }
+  std::vector<BlockIdExt> top_blocks;
   unsigned i = 0;
   for (block::McShardDescr& descr : neighbors_) {
     LOG(DEBUG) << "neighbor #" << i << " : " << descr.blk_.to_str();
-    ++pending;
-    send_closure_later(manager, &ValidatorManager::wait_out_msg_queue_proof, descr.blk_, shard_, priority(), timeout,
-                       [self = get_self(), i](td::Result<Ref<OutMsgQueueProof>> res) {
-                         LOG(DEBUG) << "got msg queue for neighbor #" << i;
-                         send_closure_later(std::move(self), &Collator::got_neighbor_msg_queue, i, std::move(res));
-                       });
+    top_blocks.push_back(descr.blk_);
     ++i;
   }
+  ++pending;
+  td::actor::send_closure_later(
+      manager, &ValidatorManager::wait_neighbor_msg_queue_proofs, shard_, std::move(top_blocks), timeout,
+      [self = get_self()](td::Result<std::map<BlockIdExt, Ref<OutMsgQueueProof>>> res) {
+        td::actor::send_closure_later(std::move(self), &Collator::got_neighbor_msg_queues, std::move(res));
+      });
   return true;
 }
 
-void Collator::got_neighbor_msg_queue(unsigned i, td::Result<Ref<OutMsgQueueProof>> R) {
+void Collator::got_neighbor_msg_queues(td::Result<std::map<BlockIdExt, Ref<OutMsgQueueProof>>> R) {
   --pending;
   if (R.is_error()) {
-    fatal_error(R.move_as_error());
+    fatal_error(R.move_as_error_prefix("failed to get neighbor msg queues: "));
     return;
   }
+  LOG(INFO) << "neighbor output queues fetched";
   auto res = R.move_as_ok();
+  unsigned i = 0;
+  for (block::McShardDescr& descr : neighbors_) {
+    LOG(DEBUG) << "neighbor #" << i << " : " << descr.blk_.to_str();
+    auto it = res.find(descr.blk_);
+    if (it == res.end()) {
+      fatal_error(PSTRING() << "no msg queue from neighbor #" << i);
+      return;
+    }
+    got_neighbor_msg_queue(i, it->second);
+    ++i;
+  }
+  check_pending();
+}
+
+void Collator::got_neighbor_msg_queue(unsigned i, Ref<OutMsgQueueProof> res) {
   BlockIdExt block_id = neighbors_.at(i).blk_;
   if (res->block_state_proof_.not_null() && !block_id.is_masterchain()) {
     block_state_proofs_.emplace(block_id.root_hash, res->block_state_proof_);
@@ -731,10 +750,6 @@ void Collator::got_neighbor_msg_queue(unsigned i, td::Result<Ref<OutMsgQueueProo
       }
     }
   } while (false);
-  if (!pending) {
-    LOG(INFO) << "all neighbor output queues fetched";
-  }
-  check_pending();
 }
 
 bool Collator::unpack_merge_last_state() {
@@ -4200,13 +4215,17 @@ bool Collator::create_block_candidate() {
                                  << consensus_config.max_collated_data_size << ")");
   }
   // 4. save block candidate
-  LOG(INFO) << "saving new BlockCandidate";
-  td::actor::send_closure_later(manager, &ValidatorManager::set_block_candidate, block_candidate->id,
-                                block_candidate->clone(), [self = get_self()](td::Result<td::Unit> saved) -> void {
-                                  LOG(DEBUG) << "got answer to set_block_candidate";
-                                  td::actor::send_closure_later(std::move(self), &Collator::return_block_candidate,
-                                                                std::move(saved));
-                                });
+  if (mode_ & CollateMode::skip_store_candidate) {
+    td::actor::send_closure_later(actor_id(this), &Collator::return_block_candidate, td::Unit());
+  } else {
+    LOG(INFO) << "saving new BlockCandidate";
+    td::actor::send_closure_later(manager, &ValidatorManager::set_block_candidate, block_candidate->id,
+                                  block_candidate->clone(), [self = get_self()](td::Result<td::Unit> saved) -> void {
+                                    LOG(DEBUG) << "got answer to set_block_candidate";
+                                    td::actor::send_closure_later(std::move(self), &Collator::return_block_candidate,
+                                                                  std::move(saved));
+                                  });
+  }
   // 5. communicate about bad and delayed external messages
   if (!bad_ext_msgs_.empty() || !delay_ext_msgs_.empty()) {
     LOG(INFO) << "sending complete_external_messages() to Manager";
