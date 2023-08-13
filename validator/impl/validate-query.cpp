@@ -5722,7 +5722,11 @@ bool ValidateQuery::save_candidate() {
     }
   });
 
-  td::actor::send_closure(manager, &ValidatorManager::set_block_candidate, id_, block_candidate.clone(), std::move(P));
+  if (is_masterchain()) {
+    td::actor::send_closure(manager, &ValidatorManager::set_block_candidate, id_, block_candidate.clone(), std::move(P));
+  } else {
+    P.set_value(td::Unit{});
+  }
   return true;
 }
 
