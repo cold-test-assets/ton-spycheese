@@ -111,18 +111,14 @@ void FullNodeShardImpl::create_overlay() {
    private:
     td::actor::ActorId<FullNodeShardImpl> node_;
   };
-  if (is_active()) {
-    td::actor::send_closure(overlays_, &overlay::Overlays::create_public_overlay, adnl_id_, overlay_id_full_.clone(),
-                            std::make_unique<Callback>(actor_id(this)), rules_,
-                            PSTRING() << "{ \"type\": \"shard\", \"shard_id\": " << get_shard()
-                                      << ", \"workchain_id\": " << get_workchain() << " }");
-  } else {
-    td::actor::send_closure(overlays_, &overlay::Overlays::create_public_overlay_ex, adnl_id_, overlay_id_full_.clone(),
-                            std::make_unique<Callback>(actor_id(this)), rules_,
-                            PSTRING() << "{ \"type\": \"shard\", \"shard_id\": " << get_shard()
-                                      << ", \"workchain_id\": " << get_workchain() << " }",
-                            false);
-  }
+  overlay::OverlayOptions options;
+  options.announce_self_ = is_active();
+  options.frequent_dht_lookup_ = is_active();
+  td::actor::send_closure(overlays_, &overlay::Overlays::create_public_overlay_ex, adnl_id_, overlay_id_full_.clone(),
+                          std::make_unique<Callback>(actor_id(this)), rules_,
+                          PSTRING() << "{ \"type\": \"shard\", \"shard_id\": " << get_shard()
+                                    << ", \"workchain_id\": " << get_workchain() << " }",
+                          options);
 
   td::actor::send_closure(rldp_, &rldp::Rldp::add_id, adnl_id_);
   td::actor::send_closure(rldp2_, &rldp2::Rldp::add_id, adnl_id_);
