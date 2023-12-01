@@ -29,6 +29,7 @@
 #include "ton/ton-types.h"
 #include "block/block.h"
 #include "block/mc-config.h"
+#include "precompiled-smc/PrecompiledSmartContract.h"
 
 namespace block {
 using td::Ref;
@@ -372,6 +373,7 @@ struct Transaction {
   Ref<vm::Stack> prepare_vm_stack(ComputePhase& cp);
   std::vector<Ref<vm::Cell>> compute_vm_libraries(const ComputePhaseConfig& cfg);
   bool prepare_compute_phase(const ComputePhaseConfig& cfg);
+  void run_precompiled_contract(const ComputePhaseConfig& cfg, precompiled::PrecompiledSmartContract& precompiled);
   bool prepare_action_phase(const ActionPhaseConfig& cfg);
   td::Status check_state_limits(const SizeLimitsConfig& size_limits, bool update_storage_stat = true);
   bool prepare_bounce_phase(const ActionPhaseConfig& cfg);

@@ -1379,6 +1379,55 @@ bool Transaction::check_in_msg_state_hash() {
   return account.recompute_tmp_addr(my_addr, d, orig_addr_rewrite.bits());
 }
 
+void Transaction::run_precompiled_contract(const ComputePhaseConfig& cfg,
+                                           precompiled::PrecompiledSmartContract& precompiled) {
+  ComputePhase& cp = *(compute_phase.get());
+  td::Timer timer;
+  auto result =
+      precompiled.run(my_addr, now, balance, new_data, *in_msg_body, in_msg, msg_balance_remaining, in_msg_extern);
+  double elapsed = timer.elapsed();
+  cp.vm_init_state_hash = td::Bits256::zero();
+  cp.exit_code = result.exit_code;
+  cp.out_of_gas = false;
+  cp.vm_final_state_hash = td::Bits256::zero();
+  cp.vm_steps = 0;
+  cp.gas_used = 0;  // TODO
+  cp.accepted = result.accepted;
+  cp.success = (cp.accepted && result.committed);
+  LOG(INFO) << "Running precompiled smart contract " << precompiled.get_name() << ": "
+            << "exit_code=" << result.exit_code << " accepted=" << result.accepted << " success=" << cp.success
+            << " time=" << elapsed << "s";
+  if (cp.accepted & use_msg_state) {
+    was_activated = true;
+    acc_status = Account::acc_active;
+  }
+  if (cfg.with_vm_log) {
+    cp.vm_log = PSTRING() << "Running precompiled smart contract " << precompiled.get_name() << ": "
+                          << "exit_code=" << result.exit_code << " accepted=" << result.accepted
+                          << " success=" << cp.success << " time=" << elapsed << "s";
+  }
+  if (cp.success) {
+    cp.new_data = precompiled.get_c4();
+    cp.actions = precompiled.get_c5();
+    int out_act_num = output_actions_count(cp.actions);
+    if (verbosity > 2) {
+      std::cerr << "new smart contract data: ";
+      bool can_be_special = true;
+      load_cell_slice_special(cp.new_data, can_be_special).print_rec(std::cerr);
+      std::cerr << "output actions: ";
+      block::gen::OutList{out_act_num}.print_ref(std::cerr, cp.actions);
+    }
+  }
+  cp.mode = 0;
+  cp.exit_arg = 0;
+  if (!cp.success && result.exit_arg) {
+    auto value = td::narrow_cast_safe<int>(result.exit_arg.value());
+    if (value.is_ok()) {
+      cp.exit_arg = value.ok();
+    }
+  }
+}
+
 /**
  * Prepares the compute phase of a transaction, which includes running TVM.
  *
@@ -1445,6 +1494,12 @@ bool Transaction::prepare_compute_phase(const ComputePhaseConfig& cfg) {
   if (in_msg_extern && in_msg_state.not_null() && account.addr != in_msg_state->get_hash().bits()) {
     LOG(DEBUG) << "in_msg_state hash mismatch in external message";
     cp.skip_reason = ComputePhase::sk_bad_state;
+    return true;
+  }
+
+  auto precompiled = precompiled::get_precompiled_smart_contract(new_code->get_hash().bits());
+  if (precompiled != nullptr && trans_type == tr_ord) {
+    run_precompiled_contract(cfg, *precompiled);
     return true;
   }
   // initialize VM
